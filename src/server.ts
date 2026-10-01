@@ -8,7 +8,11 @@ import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
-import { requireGlobalCredentials, type ServerConfig } from "./config.js";
+import {
+  rejectGlobalCredentialsWithInternalToken,
+  requireGlobalCredentials,
+  type ServerConfig,
+} from "./config.js";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -32,6 +36,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // resolveAuth() exited early during config resolution.
   if (config.isStdioMode) {
     requireGlobalCredentials(config.auth);
+  } else {
+    rejectGlobalCredentialsWithInternalToken(config.auth, config.internalToken);
   }
 
   // Three outcomes: explicit proxy URL → ProxyAgent; no proxy but env vars set
@@ -134,6 +140,11 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
   process.on("SIGTERM", handle);
 }
 
+const INTERNAL_MODE_MISSING_CREDENTIALS_MESSAGE =
+  "Figma API authentication is required. Send the tenant's Figma token in the X-Figma-Token " +
+  "header. Authorization headers are ignored and server-wide Figma credentials are disabled " +
+  "while MCP_INTERNAL_TOKEN is set.";
+
 export type HttpServerOptions = {
   /**
    * Host-header allow-list. The SDK only enables DNS-rebinding protection on
@@ -143,8 +154,9 @@ export type HttpServerOptions = {
   allowedHosts?: string[];
   /**
    * Shared secret required in `X-Internal-Auth` on MCP routes. A dedicated
-   * header is used because `Authorization: Bearer` is already claimed as a
-   * Figma OAuth token and would be forwarded to api.figma.com.
+   * header is used because `Authorization: Bearer` is otherwise claimed as a
+   * Figma OAuth token. When set, `Authorization` is ignored entirely so a
+   * caller's service JWT can never be forwarded to api.figma.com.
    */
   internalToken?: string;
 };
@@ -172,9 +184,18 @@ export async function startHttpServer(
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
     const requestKey = getRequestApiKey(req);
-    const requestBearerToken = getRequestBearerToken(req);
-    const auth = resolveRequestAuth(baseAuth, requestKey, requestBearerToken);
-    const requestSecrets = [requestKey, requestBearerToken].filter(
+    const headerBearerToken = getRequestBearerToken(req);
+    // Callers that hold the internal token are services on a shared network,
+    // whose Authorization header carries their own JWT, not a Figma token.
+    // Never forward it to Figma; they must send X-Figma-Token instead.
+    const requestBearerToken = httpOptions.internalToken ? undefined : headerBearerToken;
+    const resolvedAuth = resolveRequestAuth(baseAuth, requestKey, requestBearerToken);
+    // In this mode Authorization is ignored and global credentials are refused
+    // at startup, so the default hint would point callers at dead ends.
+    const auth = httpOptions.internalToken
+      ? { ...resolvedAuth, missingCredentialsMessage: INTERNAL_MODE_MISSING_CREDENTIALS_MESSAGE }
+      : resolvedAuth;
+    const requestSecrets = [requestKey, headerBearerToken].filter(
       (secret): secret is string => !!secret,
     );
 

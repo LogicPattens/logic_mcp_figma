@@ -23,11 +23,11 @@ const argv = cli({
     },
     port: {
       type: Number,
-      description: "Port to run the server on",
+      description: "Port to run the server on (env: FRAMELINK_PORT, default 3333)",
     },
     host: {
       type: String,
-      description: "Host to run the server on",
+      description: "Host to run the server on (env: FRAMELINK_HOST, default 127.0.0.1)",
     },
     json: {
       type: Boolean,

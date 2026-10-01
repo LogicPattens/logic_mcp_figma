@@ -140,6 +140,58 @@ export function requireGlobalCredentials(auth: FigmaAuthOptions): void {
   );
 }
 
+/**
+ * Setting MCP_INTERNAL_TOKEN marks a shared, multi-tenant deployment where
+ * every caller must bring its own Figma credentials. A global key or token
+ * there would silently serve every credential-less request from one account,
+ * mixing tenants' data access and pooling their rate limits, so refuse to
+ * start rather than rely on deployers leaving them unset.
+ */
+export function rejectGlobalCredentialsWithInternalToken(
+  auth: FigmaAuthOptions,
+  internalToken: string | undefined,
+): void {
+  if (!internalToken) return;
+  if (!auth.figmaApiKey && !auth.figmaOAuthToken) return;
+  throw new UsageError(
+    "FIGMA_API_KEY and FIGMA_OAUTH_TOKEN must not be set when MCP_INTERNAL_TOKEN is set: " +
+      "callers must send their own X-Figma-Token, and a global credential would be shared by " +
+      "every tenant. Unset them (CLI argument, environment or .env file).",
+  );
+}
+
+/**
+ * Comma-separated Host allow-list. Entries are lower-cased because the SDK
+ * compares them against `URL.hostname`, which is always lower case, so a
+ * mixed-case entry would otherwise reject every request.
+ */
+export function parseAllowedHosts(raw: string | undefined): string[] | undefined {
+  const hosts = raw
+    ?.split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  return hosts?.length ? hosts : undefined;
+}
+
+export const MIN_INTERNAL_TOKEN_LENGTH = 32;
+
+/**
+ * Trimmed so a trailing newline from a rendered secret file doesn't make every
+ * request fail with 401. A set-but-blank or short value is rejected rather
+ * than leaving the endpoint open or guessable.
+ */
+export function parseInternalToken(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const token = raw.trim();
+  if (token.length < MIN_INTERNAL_TOKEN_LENGTH) {
+    throw new UsageError(
+      `MCP_INTERNAL_TOKEN must be at least ${MIN_INTERNAL_TOKEN_LENGTH} characters ` +
+        `(got ${token.length}). Generate one with: openssl rand -hex 32`,
+    );
+  }
+  return token;
+}
+
 export function getServerConfig(flags: ServerFlags): ServerConfig {
   // Load .env before resolving env-backed values
   const envFilePath = loadEnvFile(flags.env);
@@ -179,12 +231,8 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
 
   const isStdioMode = flags.stdio === true;
 
-  const allowedHostsList = envStr("LOGICFLOW_ALLOWED_HOSTS")
-    ?.split(",")
-    .map((h) => h.trim())
-    .filter(Boolean);
-  const allowedHosts = allowedHostsList?.length ? allowedHostsList : undefined;
-  const internalToken = envStr("MCP_INTERNAL_TOKEN");
+  const allowedHosts = parseAllowedHosts(envStr("LOGICFLOW_ALLOWED_HOSTS"));
+  const internalToken = parseInternalToken(envStr("MCP_INTERNAL_TOKEN"));
 
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
@@ -227,7 +275,9 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
     console.log(`- LOGICFLOW_ALLOWED_HOSTS: ${allowedHosts?.join(",") ?? "none"}`);
     console.log(
-      `- MCP_INTERNAL_TOKEN: ${internalToken ? maskApiKey(internalToken) : "not set (MCP endpoint is unauthenticated)"}`,
+      // No suffix, unlike maskApiKey: for a shared secret, even 4 characters
+      // can be most of the value.
+      `- MCP_INTERNAL_TOKEN: ${internalToken ? `set (${internalToken.length} chars)` : "not set (MCP endpoint is unauthenticated)"}`,
     );
     console.log(`- PROXY: ${proxy.value ? "configured" : "none"} (source: ${configSources.proxy})`);
     console.log(`- OUTPUT_FORMAT: ${outputFormat.value} (source: ${configSources.outputFormat})`);

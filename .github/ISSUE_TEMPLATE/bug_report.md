@@ -54,7 +54,8 @@ If you're running the MCP locally on the command line, include all the logs for 
 
 Configuration:
 - FIGMA_API_KEY: ****8pXg (source: cli)
-- PORT: 3333 (source: default)
+- FRAMELINK_PORT: 3333 (source: default)
+- FRAMELINK_HOST: 127.0.0.1 (source: default)
 
 Initializing Figma MCP Server in HTTP mode on 127.0.0.1:3333...
 HTTP server listening on port 3333

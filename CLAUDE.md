@@ -86,7 +86,8 @@ The server supports two transports (configured in `src/server.ts`):
 
 - `FIGMA_API_KEY` or `--figma-api-key` — Personal Access Token
 - `FIGMA_OAUTH_TOKEN` or `--figma-oauth-token` — OAuth Bearer token
-- `PORT` or `--port` — HTTP server port (default: 3333)
+- `FRAMELINK_HOST` or `--host` — HTTP server bind address (default: 127.0.0.1)
+- `FRAMELINK_PORT` or `--port` — HTTP server port (default: 3333; legacy `PORT` also accepted)
 - `OUTPUT_FORMAT` or `--format` — Output format: `tree` (default), `yaml`, or `json`
 - `--json` — Back-compat alias for `--format=json`
 - `--skip-image-downloads` — Disable image download tool

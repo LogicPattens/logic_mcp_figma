@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { envBool, envInt, envStr, resolve } from "~/config.js";
+import {
+  envBool,
+  envInt,
+  envStr,
+  MIN_INTERNAL_TOKEN_LENGTH,
+  parseAllowedHosts,
+  parseInternalToken,
+  rejectGlobalCredentialsWithInternalToken,
+  resolve,
+  UsageError,
+} from "~/config.js";
 
 describe("resolve", () => {
   it("CLI flag wins over env and default", () => {
@@ -85,5 +95,65 @@ describe("envBool", () => {
 
   it("returns undefined when not set", () => {
     expect(envBool("TEST_BOOL_MISSING")).toBeUndefined();
+  });
+});
+
+describe("rejectGlobalCredentialsWithInternalToken", () => {
+  const noAuth = { figmaApiKey: "", figmaOAuthToken: "", useOAuth: false };
+
+  it("rejects a global API key when an internal token is set", () => {
+    expect(() =>
+      rejectGlobalCredentialsWithInternalToken({ ...noAuth, figmaApiKey: "pat" }, "s3cret"),
+    ).toThrow(UsageError);
+  });
+
+  it("rejects a global OAuth token when an internal token is set", () => {
+    expect(() =>
+      rejectGlobalCredentialsWithInternalToken(
+        { ...noAuth, figmaOAuthToken: "oauth", useOAuth: true },
+        "s3cret",
+      ),
+    ).toThrow(/MCP_INTERNAL_TOKEN/);
+  });
+
+  it("allows per-request credentials only when an internal token is set", () => {
+    expect(() => rejectGlobalCredentialsWithInternalToken(noAuth, "s3cret")).not.toThrow();
+  });
+
+  it("allows global credentials when no internal token is set", () => {
+    expect(() =>
+      rejectGlobalCredentialsWithInternalToken({ ...noAuth, figmaApiKey: "pat" }, undefined),
+    ).not.toThrow();
+  });
+});
+
+describe("parseAllowedHosts", () => {
+  it("lower-cases, trims and drops empty entries", () => {
+    expect(parseAllowedHosts(" Figma-MCP , ,LOCALHOST,")).toEqual(["figma-mcp", "localhost"]);
+  });
+
+  it("returns undefined when unset or only separators", () => {
+    expect(parseAllowedHosts(undefined)).toBeUndefined();
+    expect(parseAllowedHosts(" , ")).toBeUndefined();
+  });
+});
+
+describe("parseInternalToken", () => {
+  const valid = "a".repeat(MIN_INTERNAL_TOKEN_LENGTH);
+
+  it("returns undefined when unset", () => {
+    expect(parseInternalToken(undefined)).toBeUndefined();
+  });
+
+  it("trims surrounding whitespace such as a trailing newline", () => {
+    expect(parseInternalToken(`  ${valid}\n`)).toBe(valid);
+  });
+
+  it("rejects a token shorter than the minimum", () => {
+    expect(() => parseInternalToken("a".repeat(MIN_INTERNAL_TOKEN_LENGTH - 1))).toThrow(UsageError);
+  });
+
+  it("rejects a set-but-blank token instead of leaving the endpoint open", () => {
+    expect(() => parseInternalToken("   \n")).toThrow(/at least/);
   });
 });

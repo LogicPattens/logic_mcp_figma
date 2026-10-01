@@ -15,7 +15,16 @@ export type FigmaAuthOptions = {
   figmaApiKey: string;
   figmaOAuthToken: string;
   useOAuth: boolean;
+  /**
+   * Replaces the default "authentication is required" error when the caller's
+   * deployment only accepts some credential sources (see server.ts), so the
+   * error never suggests a channel that would be ignored or refused.
+   */
+  missingCredentialsMessage?: string;
 };
+
+const DEFAULT_MISSING_CREDENTIALS_MESSAGE =
+  "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.";
 
 type SvgOptions = {
   outlineText: boolean;
@@ -27,12 +36,20 @@ export class FigmaService {
   private readonly apiKey: string;
   private readonly oauthToken: string;
   private readonly useOAuth: boolean;
+  private readonly missingCredentialsMessage: string;
   private readonly baseUrl = "https://api.figma.com/v1";
 
-  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+  constructor({
+    figmaApiKey,
+    figmaOAuthToken,
+    useOAuth,
+    missingCredentialsMessage,
+  }: FigmaAuthOptions) {
     this.apiKey = figmaApiKey || "";
     this.oauthToken = figmaOAuthToken || "";
     this.useOAuth = !!useOAuth && !!this.oauthToken;
+    this.missingCredentialsMessage =
+      missingCredentialsMessage || DEFAULT_MISSING_CREDENTIALS_MESSAGE;
   }
 
   private getAuthHeaders(): Record<string, string> {
@@ -42,9 +59,7 @@ export class FigmaService {
     }
 
     if (!this.apiKey) {
-      throw new Error(
-        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
-      );
+      throw new Error(this.missingCredentialsMessage);
     }
 
     Logger.log("Using Personal Access Token for authentication");

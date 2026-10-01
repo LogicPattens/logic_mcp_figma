@@ -6,6 +6,8 @@ services:
     init: true
     restart: unless-stopped
     environment:
+      FRAMELINK_HOST: 0.0.0.0
+      FRAMELINK_PORT: 3333
       LOGICFLOW_ALLOWED_HOSTS: figma-mcp,localhost
       MCP_INTERNAL_TOKEN: ${MCP_INTERNAL_TOKEN:?set MCP_INTERNAL_TOKEN}
       OUTPUT_FORMAT: ${OUTPUT_FORMAT:-tree}

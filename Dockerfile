@@ -26,5 +26,5 @@ COPY --from=build /app/dist ./dist
 USER node
 EXPOSE 3333
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- --header "Host: localhost" http://127.0.0.1:3333/healthz || exit 1
+  CMD wget -qO- --header "Host: localhost" "http://127.0.0.1:${FRAMELINK_PORT:-3333}/healthz" || exit 1
 CMD ["node", "dist/bin.js"]
