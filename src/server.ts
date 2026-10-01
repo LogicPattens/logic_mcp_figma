@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { Server } from "http";
 import { timingSafeEqual } from "crypto";
+import { join } from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
@@ -156,10 +157,15 @@ export type HttpServerOptions = {
    * Shared secret required in `X-Internal-Auth` on MCP routes. A dedicated
    * header is used because `Authorization: Bearer` is otherwise claimed as a
    * Figma OAuth token. When set, `Authorization` is ignored entirely so a
-   * caller's service JWT can never be forwarded to api.figma.com.
+   * caller's service JWT can never be forwarded to api.figma.com. Also makes
+   * `X-Tenant-ID` mandatory, which scopes image downloads to IMAGE_DIR/<tenant>.
    */
   internalToken?: string;
 };
+
+// The tenant ID becomes a directory name under IMAGE_DIR, so only characters
+// that cannot form a path ("..", "/", backslash) are allowed. Covers UUIDs and slugs.
+const TENANT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export async function startHttpServer(
   host: string,
@@ -182,7 +188,8 @@ export async function startHttpServer(
   });
 
   const handlePost = async (req: Request, res: Response) => {
-    Logger.log("Received StreamableHTTP request");
+    const tenantId: string | undefined = res.locals.tenantId;
+    Logger.log(`Received StreamableHTTP request${tenantId ? ` (tenant ${tenantId})` : ""}`);
     const requestKey = getRequestApiKey(req);
     const headerBearerToken = getRequestBearerToken(req);
     // Callers that hold the internal token are services on a shared network,
@@ -203,7 +210,13 @@ export async function startHttpServer(
     // redaction list, so make them available only for this request scope.
     await telemetry.withRequestSecrets(requestSecrets, async () => {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const mcpServer = createServer(auth, { ...serverOptions, transport: "http" });
+      // Each request gets its own server, so scoping imageDir to the tenant's
+      // folder here makes the download tool's containment check (localPath
+      // must resolve inside imageDir) keep every write inside that tenant.
+      const imageDir = tenantId
+        ? join(serverOptions.imageDir ?? process.cwd(), tenantId)
+        : serverOptions.imageDir;
+      const mcpServer = createServer(auth, { ...serverOptions, imageDir, transport: "http" });
       const conn: ActiveConnection = { transport, server: mcpServer };
       activeConnections.add(conn);
       res.on("close", () => {
@@ -222,12 +235,15 @@ export async function startHttpServer(
   };
 
   const auth = requireInternalToken(httpOptions.internalToken);
+  // A shared deployment (internal token set) must always know whose request
+  // this is; local single-user setups may omit the header.
+  const tenant = resolveTenantId(Boolean(httpOptions.internalToken));
 
   // Mount stateless StreamableHTTP on both /mcp and /sse.
   // Serving StreamableHTTP at /sse lets existing client configs keep working —
   // modern MCP clients probe with a POST before falling back to SSE.
   for (const path of ["/mcp", "/sse"]) {
-    app.post(path, auth, handlePost);
+    app.post(path, auth, tenant, handlePost);
     app.get(path, handleMethodNotAllowed);
     app.delete(path, handleMethodNotAllowed);
   }
@@ -281,6 +297,33 @@ function requireInternalToken(expected: string | undefined) {
     }
     next();
   };
+}
+
+function resolveTenantId(required: boolean) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const raw = req.headers["x-tenant-id"];
+    const tenantId = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+    if (!tenantId) {
+      if (!required) return next();
+      return rejectBadRequest(res, "X-Tenant-ID header is required");
+    }
+    if (!TENANT_ID_PATTERN.test(tenantId)) {
+      return rejectBadRequest(
+        res,
+        "Invalid X-Tenant-ID: use 1-128 letters, digits, '_' or '-', starting with a letter or digit",
+      );
+    }
+    res.locals.tenantId = tenantId;
+    next();
+  };
+}
+
+function rejectBadRequest(res: Response, message: string): void {
+  res.status(400).json({
+    jsonrpc: "2.0",
+    error: { code: ErrorCode.InvalidRequest, message },
+    id: null,
+  });
 }
 
 function resolveRequestAuth(

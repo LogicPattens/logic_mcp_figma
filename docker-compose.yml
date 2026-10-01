@@ -13,9 +13,19 @@ services:
       OUTPUT_FORMAT: ${OUTPUT_FORMAT:-tree}
       FIGMA_TIMEOUT_MS: ${FIGMA_TIMEOUT_MS:-120000}
       FRAMELINK_TELEMETRY: "off"
+      # Enables download_figma_images (the Dockerfile defaults it off). Files
+      # land under IMAGE_DIR at the caller's `localPath`, which cannot escape it,
+      # but callers share the directory: use a per-tenant localPath such as
+      # <tenant_id>/<request_id> so tenants cannot overwrite each other's files.
+      SKIP_IMAGE_DOWNLOADS: "false"
+      IMAGE_DIR: /data/figma_download
       # Deliberately NOT set: FIGMA_API_KEY, FIGMA_OAUTH_TOKEN. Either one makes
       # requests without X-Figma-Token fall back to a single shared Figma account,
       # breaking tenant isolation and pooling every tenant's rate limit.
+    volumes:
+      # Create ./figma_download before `up` (startservices.sh does): if Docker
+      # creates it, it is root-owned and the `node` user (uid 1000) can't write.
+      - ./figma_download:/data/figma_download
     # No `ports:` — reachable only from containers on shared-network.
     networks:
       - sharednet

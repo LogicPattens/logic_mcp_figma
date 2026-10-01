@@ -83,13 +83,43 @@ describe("HTTP access control", () => {
     const res = await send(port, {
       method: "POST",
       path: "/mcp",
-      headers: { "X-Internal-Auth": "s3cret" },
+      // X-Tenant-ID is mandatory alongside the internal token.
+      headers: { "X-Internal-Auth": "s3cret", "X-Tenant-ID": "acme" },
     });
 
     expect(res.status).toBe(200);
   });
 
   it("leaves MCP routes open when no internal token is configured", async () => {
+    const port = await start({});
+
+    const res = await send(port, { method: "POST", path: "/mcp" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("requires a valid X-Tenant-ID when an internal token is set", async () => {
+    const port = await start({ internalToken: "s3cret" });
+    const post = (headers: Record<string, string>) =>
+      send(port, {
+        method: "POST",
+        path: "/mcp",
+        headers: { "X-Internal-Auth": "s3cret", ...headers },
+      });
+
+    const missing = await post({});
+    const traversal = await post({ "X-Tenant-ID": "../globex" });
+    const dotted = await post({ "X-Tenant-ID": "acme.corp" });
+    const uuid = await post({ "X-Tenant-ID": "3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90" });
+
+    expect(missing.status).toBe(400);
+    expect(JSON.parse(missing.body).error.message).toContain("X-Tenant-ID header is required");
+    expect(traversal.status).toBe(400);
+    expect(dotted.status).toBe(400);
+    expect(uuid.status).toBe(200);
+  });
+
+  it("leaves X-Tenant-ID optional when no internal token is configured", async () => {
     const port = await start({});
 
     const res = await send(port, { method: "POST", path: "/mcp" });

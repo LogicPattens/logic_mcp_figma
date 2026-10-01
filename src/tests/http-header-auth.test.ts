@@ -202,7 +202,11 @@ describe("HTTP header Figma API key authentication", () => {
   // service auth. A request missing X-Figma-Token must fail, not leak it.
   it("never forwards an Authorization bearer token to Figma when an internal token is set", async () => {
     await connectClient(
-      { "X-Internal-Auth": "s3cret", Authorization: "Bearer some-service-jwt" },
+      {
+        "X-Internal-Auth": "s3cret",
+        "X-Tenant-ID": "acme",
+        Authorization: "Bearer some-service-jwt",
+      },
       emptyAuth,
       { internalToken: "s3cret" },
     );
@@ -239,6 +243,7 @@ describe("HTTP header Figma API key authentication", () => {
     await connectClient(
       {
         "X-Internal-Auth": "s3cret",
+        "X-Tenant-ID": "acme",
         "X-Figma-Token": "request-key",
         Authorization: "Bearer some-service-jwt",
       },
