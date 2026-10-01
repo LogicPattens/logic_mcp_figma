@@ -172,6 +172,31 @@ describe("HTTP header Figma API key authentication", () => {
     });
   });
 
+  // Callers on a shared network may carry their own service JWT in
+  // Authorization; X-Figma-Token must win so that JWT is never sent to Figma.
+  it("prefers X-Figma-Token over an Authorization bearer token on the same request", async () => {
+    await connectClient({
+      "X-Figma-Token": "request-key",
+      Authorization: "Bearer some-service-jwt",
+    });
+
+    const result = await client.request(
+      {
+        method: "tools/call",
+        params: {
+          name: "get_figma_data",
+          arguments: { fileKey: "abc123" },
+        },
+      },
+      CallToolResultSchema,
+    );
+
+    expect(result.isError).toBeUndefined();
+    const headers = firstFigmaRequestHeaders();
+    expect(headers).toMatchObject({ "X-Figma-Token": "request-key" });
+    expect(headers).not.toHaveProperty("Authorization");
+  });
+
   it("returns a tool error when no server or request credentials are available", async () => {
     await connectClient();
 

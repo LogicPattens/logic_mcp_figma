@@ -1,0 +1,28 @@
+services:
+  figma-mcp:
+    build: .
+    image: logicpatterns/figma-mcp:latest
+    container_name: figma-mcp
+    init: true
+    restart: unless-stopped
+    environment:
+      LOGICFLOW_ALLOWED_HOSTS: figma-mcp,localhost
+      MCP_INTERNAL_TOKEN: ${MCP_INTERNAL_TOKEN:?set MCP_INTERNAL_TOKEN}
+      OUTPUT_FORMAT: ${OUTPUT_FORMAT:-tree}
+      FIGMA_TIMEOUT_MS: ${FIGMA_TIMEOUT_MS:-120000}
+      FRAMELINK_TELEMETRY: "off"
+      # Deliberately NOT set: FIGMA_API_KEY, FIGMA_OAUTH_TOKEN. Either one makes
+      # requests without X-Figma-Token fall back to a single shared Figma account,
+      # breaking tenant isolation and pooling every tenant's rate limit.
+    # No `ports:` — reachable only from containers on shared-network.
+    networks:
+      - sharednet
+    deploy:
+      resources:
+        limits:
+          memory: 1g # large files are fully simplified in memory
+
+networks:
+  sharednet:
+    name: shared-network
+    external: true

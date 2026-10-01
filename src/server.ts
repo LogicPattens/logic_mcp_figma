@@ -2,6 +2,7 @@ import { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { Server } from "http";
+import { timingSafeEqual } from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
@@ -52,7 +53,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   const telemetryEnabled = telemetry.initTelemetry({
     optOut: config.noTelemetry,
-    redactFromErrors: [config.auth.figmaApiKey, config.auth.figmaOAuthToken],
+    redactFromErrors: [
+      config.auth.figmaApiKey,
+      config.auth.figmaOAuthToken,
+      config.internalToken ?? "",
+    ],
   });
 
   if (telemetryEnabled) {
@@ -89,7 +94,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerShutdownHandlers(async () => {});
   } else {
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
-    await startHttpServer(config.host, config.port, config.auth, serverOptions);
+    await startHttpServer(config.host, config.port, config.auth, serverOptions, {
+      allowedHosts: config.allowedHosts,
+      internalToken: config.internalToken,
+    });
 
     registerShutdownHandlers(async () => {
       Logger.log("Shutting down server...");
@@ -126,17 +134,40 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
   process.on("SIGTERM", handle);
 }
 
+export type HttpServerOptions = {
+  /**
+   * Host-header allow-list. The SDK only enables DNS-rebinding protection on
+   * its own for loopback binds, so a container bound to 0.0.0.0 accepts any
+   * Host unless this is set.
+   */
+  allowedHosts?: string[];
+  /**
+   * Shared secret required in `X-Internal-Auth` on MCP routes. A dedicated
+   * header is used because `Authorization: Bearer` is already claimed as a
+   * Figma OAuth token and would be forwarded to api.figma.com.
+   */
+  internalToken?: string;
+};
+
 export async function startHttpServer(
   host: string,
   port: number,
   baseAuth: FigmaAuthOptions,
   serverOptions: Omit<CreateServerOptions, "transport">,
+  httpOptions: HttpServerOptions = {},
 ): Promise<Server> {
   if (httpServer) {
     throw new Error("HTTP server is already running");
   }
 
-  const app = createMcpExpressApp({ host });
+  const app = createMcpExpressApp({ host, allowedHosts: httpOptions.allowedHosts });
+
+  // Registered after host validation (so probes must send an allowed Host)
+  // but deliberately outside the internal-token check so orchestrators can
+  // probe without holding the secret.
+  app.get("/healthz", (_req, res) => {
+    res.json({ status: "ok", version: process.env.NPM_PACKAGE_VERSION ?? "unknown" });
+  });
 
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
@@ -169,11 +200,13 @@ export async function startHttpServer(
     res.status(405).set("Allow", "POST").send("Method Not Allowed");
   };
 
+  const auth = requireInternalToken(httpOptions.internalToken);
+
   // Mount stateless StreamableHTTP on both /mcp and /sse.
   // Serving StreamableHTTP at /sse lets existing client configs keep working —
   // modern MCP clients probe with a POST before falling back to SSE.
   for (const path of ["/mcp", "/sse"]) {
-    app.post(path, handlePost);
+    app.post(path, auth, handlePost);
     app.get(path, handleMethodNotAllowed);
     app.delete(path, handleMethodNotAllowed);
   }
@@ -206,6 +239,27 @@ export async function startHttpServer(
     });
     httpServer = server;
   });
+}
+
+function requireInternalToken(expected: string | undefined) {
+  const expectedBuf = expected ? Buffer.from(expected) : undefined;
+  return (req: Request, res: Response, next: NextFunction) => {
+    // Unset means open — the upstream default, and what local dev relies on.
+    if (!expectedBuf) return next();
+    const raw = req.headers["x-internal-auth"];
+    const provided = Buffer.from((Array.isArray(raw) ? raw[0] : raw) ?? "");
+    // timingSafeEqual throws on length mismatch, so compare lengths first;
+    // that leaks only the secret's length, not its content.
+    if (provided.length !== expectedBuf.length || !timingSafeEqual(provided, expectedBuf)) {
+      res.status(401).json({
+        jsonrpc: "2.0",
+        error: { code: ErrorCode.InvalidRequest, message: "Unauthorized" },
+        id: null,
+      });
+      return;
+    }
+    next();
+  };
 }
 
 function resolveRequestAuth(

@@ -56,13 +56,27 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 // we only need enough to identify the origin ("Blocked by Zscaler", etc.).
 const MAX_RESPONSE_BODY_CHARS = 500;
 
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+// Read per call rather than at module load: the .env file is loaded after
+// this module is imported. Without a signal, undici waits up to its 300s
+// default headersTimeout, which pins the caller on huge whole-file fetches.
+function figmaTimeoutMs(): number {
+  const parsed = Number(process.env.FIGMA_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
+}
+
 export async function fetchJSON<T extends { status?: number }>(
   url: string,
   options: RequestOptions = {},
 ): Promise<{ data: T; rawSize: number }> {
   const { redactFromResponseBody = [], ...fetchOptions } = options;
+  const timeoutMs = figmaTimeoutMs();
   try {
-    const response = await fetch(url, fetchOptions);
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: fetchOptions.signal ?? AbortSignal.timeout(timeoutMs),
+    });
 
     if (!response.ok) {
       const responseHeaders: Record<string, string> = {};
@@ -89,6 +103,16 @@ export async function fetchJSON<T extends { status?: number }>(
     const data = JSON.parse(text) as T;
     return { data, rawSize };
   } catch (error: unknown) {
+    // The signal also covers reading the body, so a slow multi-MB download
+    // can land here from response.text() as well as from fetch() itself.
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      const wrapped = new Error(
+        `Figma API did not respond within ${timeoutMs / 1000}s — try a narrower nodeId or a ` +
+          `depth limit, or raise FIGMA_TIMEOUT_MS.`,
+        { cause: error },
+      );
+      tagError(wrapped, { network_code: "TIMEOUT", category: "network", is_retryable: true });
+    }
     const networkCode = getConnectionErrorCode(error);
     if (networkCode) {
       const message = error instanceof Error ? error.message : String(error);

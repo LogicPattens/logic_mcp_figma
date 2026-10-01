@@ -36,6 +36,10 @@ export interface ServerConfig {
   imageDir: string;
   isStdioMode: boolean;
   noTelemetry: boolean;
+  /** Extra Host-header values to accept in HTTP mode; see startHttpServer. */
+  allowedHosts: string[] | undefined;
+  /** Shared secret callers must send in X-Internal-Auth; unset leaves HTTP open. */
+  internalToken: string | undefined;
   configSources: Record<string, Source>;
 }
 
@@ -175,6 +179,13 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
 
   const isStdioMode = flags.stdio === true;
 
+  const allowedHostsList = envStr("LOGICFLOW_ALLOWED_HOSTS")
+    ?.split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  const allowedHosts = allowedHostsList?.length ? allowedHostsList : undefined;
+  const internalToken = envStr("MCP_INTERNAL_TOKEN");
+
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
     flags.noTelemetry === true
@@ -214,6 +225,10 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
+    console.log(`- LOGICFLOW_ALLOWED_HOSTS: ${allowedHosts?.join(",") ?? "none"}`);
+    console.log(
+      `- MCP_INTERNAL_TOKEN: ${internalToken ? maskApiKey(internalToken) : "not set (MCP endpoint is unauthenticated)"}`,
+    );
     console.log(`- PROXY: ${proxy.value ? "configured" : "none"} (source: ${configSources.proxy})`);
     console.log(`- OUTPUT_FORMAT: ${outputFormat.value} (source: ${configSources.outputFormat})`);
     console.log(
@@ -237,6 +252,8 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     imageDir: imageDir.value,
     isStdioMode,
     noTelemetry,
+    allowedHosts,
+    internalToken,
     configSources,
   };
 }
